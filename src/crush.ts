@@ -1,7 +1,7 @@
 import { spawn, type Subprocess } from "bun";
 import { config as cfg } from "./config.ts";
 import { log } from "./logger.ts";
-import { getSession, setSession } from "./sessions.ts";
+import { getSession, setSession, listCrushSessions } from "./sessions.ts";
 
 export interface RunResult {
   ok: boolean;
@@ -31,17 +31,10 @@ export async function stop(chatId: number): Promise<boolean> {
   return true;
 }
 
-function parseSessionId(out: string): string | null {
-  // crush run prints session info; the session id appears as a UUID-like token.
-  // We try a few shapes: "session: <id>", "Session id: <id>", a bare 8-4-4-4-12 uuid.
-  const patterns = [
-    /session[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
-    /\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i,
-  ];
-  for (const re of patterns) {
-    const m = out.match(re);
-    if (m) return m[1];
-  }
+function parseSessionId(_out: string): string | null {
+  // crush run does not print the session id to stdout. Kept for future use /
+  // structured-output modes. Session discovery is done by diffing the session
+  // list in runTurn instead.
   return null;
 }
 
@@ -62,8 +55,19 @@ export async function runTurn(
   }
 
   const stored = getSession(chatId);
-  const args = ["run"];
-  if (opts.resume && stored.sessionId) args.push("--session", stored.sessionId);
+  // Snapshot the newest session id BEFORE the run, so a fresh turn's new
+  // session can be discovered by diffing afterwards (crush run doesn't print it).
+  const prevNewest = listCrushSessions(1)[0]?.id ?? null;
+  const hadSession = !!stored.sessionId;
+
+  const args = ["run", "--quiet"];
+  if (opts.resume && stored.sessionId) {
+    args.push("--session", stored.sessionId);
+  } else if (opts.resume && !stored.sessionId) {
+    // no per-chat session yet but caller wants continuity — continue most recent.
+    // Only safe because the bot is single-owner; this gives instant continuity.
+    args.push("--continue");
+  }
   if (cfg.crushModel) args.push("--model", cfg.crushModel);
   args.push(prompt);
 
@@ -127,12 +131,14 @@ export async function runTurn(
   active.delete(chatId);
 
   const durationMs = Date.now() - startedAt;
-  const detectedSession = parseSessionId(stdout + stderr);
-  const finalSession = detectedSession ?? stored.sessionId ?? null;
+  // Discover the session id by diffing the newest session before/after the run,
+  // since `crush run` doesn't print it. Falls back to the previously stored one.
+  const nowNewest = listCrushSessions(1)[0]?.id ?? null;
+  const discovered = !hadSession && nowNewest && nowNewest !== prevNewest ? nowNewest : null;
+  const finalSession = discovered ?? stored.sessionId ?? null;
 
   if (finalSession) {
-    const isFirst = !stored.sessionId;
-    setSession(chatId, finalSession, isFirst && prompt ? prompt.slice(0, 200) : undefined);
+    setSession(chatId, finalSession, hadSession ? undefined : (prompt ? prompt.slice(0, 200) : undefined));
   }
 
   log.info("crush turn done", { chatId, exitCode, durationMs, sessionId: finalSession });
