@@ -1,0 +1,22 @@
+{
+  "name": "crush-telegram",
+  "version": "1.0.0",
+  "description": "Your Crush AI assistant in your pocket. A full-stack bidirectional bridge between Telegram and the Crush CLI — headless turns, session continuity, web dashboard, and proactive push notifications. Bun + TypeScript, zero runtime dependencies.",
+  "module": "src/index.ts",
+  "type": "module",
+  "license": "MIT",
+  "author": "naoufac",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch run src/index.ts",
+    "send": "bun run src/send.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/bun": "^1.1.0"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}
