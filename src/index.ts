@@ -180,11 +180,17 @@ async function main() {
   botUsername = me.username;
   log.info("bot identity", { id: me.id, username: me.username, name: me.first_name });
 
-  await setMyCommands(cfg, cfg.ownerId);
-  await sendMessage(cfg, cfg.ownerId,
-    `🚀 *crush-Telegram bridge online* as @${botUsername}\n` +
-    `Send anything to run a Crush turn. /help for commands.`,
-    { parseMode: "Markdown" });
+  // setMyCommands + welcome are best-effort at boot: they fail until the owner
+  // has pressed Start on the bot at least once. Don't crash — just keep polling.
+  try { await setMyCommands(cfg, cfg.ownerId); } catch (e) { log.warn("setMyCommands skipped (owner hasn't started the bot yet)", { error: String(e) }); }
+  try {
+    await sendMessage(cfg, cfg.ownerId,
+      `🚀 *crush-Telegram bridge online* as @${botUsername}\n` +
+      `Send anything to run a Crush turn. /help for commands.`,
+      { parseMode: "Markdown" });
+  } catch (e) {
+    log.warn("welcome message skipped (owner hasn't started the bot yet)", { error: String(e) });
+  }
 
   startDashboard(() => makeState(botUsername));
   await loop();

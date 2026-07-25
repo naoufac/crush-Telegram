@@ -14,7 +14,9 @@ function loadDotenv(path: string) {
     if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
       val = val.slice(1, -1);
     }
-    if (!(key in process.env)) process.env[key] = val;
+    // .env is authoritative for this dedicated process: it wins over any
+    // inherited env (e.g. a workspace-wide TELEGRAM_BOT_TOKEN from another bot).
+    process.env[key] = val;
   }
 }
 
