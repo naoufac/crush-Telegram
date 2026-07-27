@@ -129,14 +129,14 @@ export interface BridgeState {
   dash: boolean;
   dashPort: number;
   activeRuns: ReturnType<typeof activeRuns>;
-  chatSessions: ReturnType<typeof recentChatSessions>;
-  crushSessions: ReturnType<typeof listCrushSessions>;
+  chatSessions: Awaited<ReturnType<typeof recentChatSessions>>;
+  crushSessions: Awaited<ReturnType<typeof listCrushSessions>>;
   logTail: string;
 }
 
 const STARTED_AT = Date.now();
 
-export function makeState(botUsername: string): BridgeState {
+export async function makeState(botUsername: string): Promise<BridgeState> {
   return {
     pid: process.pid,
     uptimeMs: Date.now() - STARTED_AT,
@@ -147,23 +147,23 @@ export function makeState(botUsername: string): BridgeState {
     dash: cfg.dashPort > 0,
     dashPort: cfg.dashPort,
     activeRuns: activeRuns(),
-    chatSessions: recentChatSessions(),
-    crushSessions: listCrushSessions(),
+    chatSessions: await recentChatSessions(),
+    crushSessions: await listCrushSessions(),
     logTail: tailLog(80),
   };
 }
 
-export function startDashboard(getState: () => BridgeState) {
+export function startDashboard(getState: () => Promise<BridgeState>) {
   if (cfg.dashPort <= 0) return;
   const server = Bun.serve({
     port: cfg.dashPort,
-    fetch(req) {
+    fetch: async (req) => {
       const url = new URL(req.url);
       const key = url.searchParams.get("key") ?? "";
       const dashKeyOk = !cfg.dashKey || cfg.dashKey === "" || key === cfg.dashKey;
       if (url.pathname === "/api/state") {
         if (!dashKeyOk) return new Response("forbidden", { status: 403 });
-        return Response.json(getState());
+        return Response.json(await getState());
       }
       if (url.pathname === "/" || url.pathname === "/index.html") {
         if (!dashKeyOk) return new Response("forbidden — pass ?key=...", { status: 403 });

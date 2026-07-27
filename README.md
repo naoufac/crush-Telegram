@@ -1,154 +1,88 @@
 # crush-Telegram
 
-**Your Crush AI assistant, in your pocket.** A full-stack bidirectional bridge between a Telegram bot and the [Crush](https://github.com/charmbracelet/crush) CLI — headless turns, session continuity, a web dashboard, and a host-side push tool — all on your own machine, owner-locked, always on.
+Your [Crush](https://github.com/charmbracelet/crush) AI assistant in your pocket. A full-stack bridge between Telegram and the Crush CLI that delivers the **complete terminal experience** — not a limited headless wrapper.
 
-Send a message from your phone; a real headless Crush turn runs on your server with full tool access and the reply is delivered back. Replies stream into your chat. Past conversations are resumed automatically until you start a fresh one. The host can also push messages *to* you with a one-line CLI.
+## How it works
 
-Built with **Bun + TypeScript, zero runtime dependencies** (stdlib + `Bun.spawn` + `fetch` only).
+The bridge is a real Crush **client** over the server's HTTP+SSE API (`crush server`). This is the same protocol the TUI uses. The workspace binds to your project directory and shares its `~/.crush` database, so **every terminal session is visible, loadable, and continuable from Telegram**.
 
-![architecture](docs/architecture.png)
+```
+Phone  ←──→  Telegram Bot API  ←──→  Bridge (Bun)  ←──→  crush server
+                                      · HTTP REST        · agent + tools
+                                      · SSE events        · skills
+                                      · auto-restart      · shared ~/.crush
+```
 
 ## Features
 
-- **Real Crush turns** — each message runs `crush run` headless with `--session` continuity, so a conversation on Telegram behaves exactly like one in the terminal.
-- **Session continuity** — replies are tagged with the session id and resumed on the next message. `/new` drops the session and starts fresh.
-- **Owner-locked** — only your numeric Telegram user id can drive the bot. Everyone else is silently ignored.
-- **Web dashboard** — optional light-on-dark status page: live uptime, active runs, per-chat sessions, recent Crush sessions, log tail, system vitals. Token-gated, served by the bridge itself.
-- **Push from host** — `bun run src/send.ts "msg"` (or pipe stdin) sends to your chat from cron, hooks, or other scripts. This is the reverse-direction half of the bridge.
-- **Self-healing** — broken `--session` targets fall back to a fresh session instead of failing forever.
-- **Ops built in** — `/stop` kills a runaway turn, `/status` and `/log` inspect the bridge, `/reboot` restarts it, systemd `Restart=always` keeps it up.
-
-## Architecture
-
-```
-   you (phone)  ──►  Telegram Bot API  ──►  bridge (Bun, long polling)
-                                                   │
-                                  ┌────────────────┼─────────────────┐
-                                  ▼                ▼                 ▼
-                          Bun.spawn(crush)   sessions.json     web dashboard
-                                  │            (per chat)        (:port?key=)
-                                  ▼
-                          Crush headless turn
-                          (full tools, --session)
-                                  │
-                                  ▼
-                          reply streamed back
-                          to your Telegram chat
-
-   host scripts  ──►  bun run src/send.ts "msg"  ──►  Telegram Bot API  ──►  you
-```
-
-The bridge is a single long-polling loop (`getUpdates`, 30s timeout) that dispatches owner messages to `crush run`. Each chat keeps a `data/sessions/<chatId>.json` recording the active Crush session id, so the next turn resumes it. The dashboard is a separate `Bun.serve` on `DASH_PORT`, gated by `DASH_KEY`. The push tool (`send.ts`) is a standalone script that hits the Telegram API directly.
-
-## Quickstart
-
-Requirements: **Bun 1.1+** and a working `crush` login for the user that runs the bridge.
-
-```bash
-# 1. Get a bot token from @BotFather, and your numeric user id from @userinfobot
-
-# 2. Clone and configure
-git clone https://github.com/naoufac/crush-Telegram /opt/crush-telegram
-cd /opt/crush-telegram
-cp .env.example .env && $EDITOR .env       # set TELEGRAM_BOT_TOKEN and OWNER_ID at minimum
-chmod 600 .env
-
-# 3. Run in foreground (for testing)
-bun run src/index.ts
-
-# 4. Run as a service
-sudo cp crush-telegram.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now crush-telegram
-journalctl -u crush-telegram -f
-
-# 5. Open your bot in Telegram, press Start, say hi
-```
-
-To enable the dashboard, set `DASH_PORT` and `DASH_KEY` in `.env`, open the port in your firewall, and visit `http://your-server:PORT/?key=YOUR_KEY`.
-
-## Configuration (`.env`)
-
-| Var | Required | Description |
-|-----|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | yes | Bot token from @BotFather |
-| `OWNER_ID` | yes | Your numeric Telegram user id (only this user can drive the bot) |
-| `DASH_PORT` | no | Dashboard HTTP port (omit to disable) |
-| `DASH_KEY` | no | Dashboard access key (`?key=...`) |
-| `CRUSH_CWD` | no | Working directory for headless turns (default `/root`) |
-| `CRUSH_YOLO` | no | `true` to run crush with `--yolo` (auto-accept permissions) |
-| `CRUSH_TIMEOUT` | no | Max seconds for a turn before it is killed (default `600`) |
-| `CRUSH_MODEL` | no | Pin a model, e.g. `gpt-5-codex` |
+- **Session continuity** — multi-turn conversations with full recall, just like the terminal
+- **Load any old session** — `/sessions` shows clickable buttons with titles + message counts. Tap to load and continue. Works with terminal-created sessions
+- **Tools and skills** — file reads, writes, bash, LSP, MCP — all execute through the server. Tool calls surface live as `🔧 tool` messages
+- **Interactive permission flow** — Allow/Deny/Allow-session buttons per tool call (set `CRUSH_AUTO_ALLOW=false`)
+- **Live streaming** — assistant text streams into the reply as it generates
+- **Server auto-recovery** — bridge detects server death, restarts it, reconnects, resumes
+- **Web dashboard** — live state at `http://localhost:PORT/?key=...`
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `/new` | Start a fresh Crush session (drop the resume id) |
-| `/stop` | Kill the running turn |
-| `/status` | Bridge uptime, active runs, your session |
-| `/log` | Tail bridge logs |
-| `/sessions` | List recent chat sessions |
-| `/reboot` | Restart the bridge process |
+| Command | Description |
+|---------|-------------|
 | `/help` | Show help |
-| anything else | Runs a Crush turn and replies |
+| `/new` | Start a fresh session |
+| `/sessions` | List sessions as clickable buttons with titles |
+| `/resume <id>` | Load and continue a session (accepts short ID prefix) |
+| `/stop` | Cancel the running turn |
+| `/status` | Bridge state |
+| `/log` | Tail bridge logs |
+| *(anything else)* | Runs a Crush turn |
 
-Unknown `/slash` commands are passed through to Crush, so skill shortcuts work.
-
-## Push from the host
-
-The bridge is bidirectional. From the host you can push a message to your chat without involving the bot loop:
-
-```bash
-# direct
-bun run src/send.ts "deploy finished: 12 passed, 0 failed"
-
-# from a pipe
-crush run "summarize today's commits" | bun run src/send.ts
-
-# to a specific chat (default is OWNER_ID)
-bun run src/send.ts --chat 123456789 "ping"
-```
-
-Wire this into cron, deploy hooks, monitoring, or any other script that wants to reach you.
-
-## Security model
-
-- **Owner-locked.** Every inbound message is checked against `OWNER_ID`. Non-owner messages are logged and dropped — no response, no error, nothing. The bot is invisible to everyone else.
-- **Token in `.env`.** The bot token and dashboard key live in `.env`, which is gitignored. `chmod 600 .env`.
-- **Dashboard gated.** `DASH_KEY` is required for both the HTML page and the `/api/state` endpoint. Without it the dashboard returns 403.
-- **No inbound network surface.** The bridge uses long-polling outbound to the Telegram API. The only listener is the optional dashboard port, which you firewall.
-- **`--yolo` is opt-in.** Off by default. Enable only on a host where you trust the bot to take actions (file writes, shell commands) without confirmation.
-- **Rotate the token if leaked.** If the bot token is exposed (committed, pasted in chat), revoke it via @BotFather and update `.env` immediately.
-
-## Project layout
-
-```
-crush-telegram/
-├── src/
-│   ├── index.ts        # main bot loop: polling, command dispatch, turn runner
-│   ├── config.ts       # .env loader + typed config
-│   ├── logger.ts       # leveled logger with file sink
-│   ├── telegram.ts     # Telegram Bot API client (fetch-based, chunked sends)
-│   ├── crush.ts        # Bun.spawn wrapper around `crush run`, session parsing
-│   ├── sessions.ts     # per-chat session store + crush session discovery
-│   ├── send.ts         # standalone push tool (host -> Telegram)
-│   └── dashboard.ts    # Bun.serve dashboard with embedded HTML
-├── crush-telegram.service   # systemd unit
-├── .env.example             # config template
-├── package.json
-├── tsconfig.json
-└── README.md
-```
-
-## Development
+## Setup
 
 ```bash
-bun install            # dev deps only (typescript types)
-bun run typecheck      # tsc --noEmit
-bun run dev            # bun --watch, auto-restart on file change
+git clone https://github.com/naoufac/crush-Telegram.git
+cd crush-Telegram
+cp .env.example .env  # fill in TELEGRAM_BOT_TOKEN, OWNER_ID
+bun run src/index.ts
 ```
+
+### `.env` reference
+
+```bash
+TELEGRAM_BOT_TOKEN=123456:ABC-DEF...   # from @BotFather (required)
+OWNER_ID=123456789                      # your user ID (required)
+CRUSH_SERVER_PORT=23917                 # crush server TCP port
+CRUSH_CWD=/root                         # project dir (shares ~/.crush)
+CRUSH_AUTO_ALLOW=true                   # auto-allow tools (matches allowed_tools:["*"])
+CRUSH_TIMEOUT=600                       # max turn seconds
+DASH_PORT=8088                          # dashboard port (blank=off)
+DASH_KEY=your-secret                    # dashboard access key
+```
+
+## Architecture
+
+| File | Role |
+|------|------|
+| `src/server-client.ts` | Crush server lifecycle + HTTP/SSE client (workspace, sessions, agent, permissions) |
+| `src/crush.ts` | Turn execution: send prompt, demux SSE events, resolve on run_complete |
+| `src/index.ts` | Telegram polling, command dispatch, inline-keyboard permission/question flows, streaming |
+| `src/sessions.ts` | Per-chat session persistence, create/load/list/new |
+| `src/telegram.ts` | Bot API client (zero deps): chunking, Markdown fallback, inline keyboards, long-poll |
+| `src/dashboard.ts` | Optional web dashboard |
+| `src/config.ts` | `.env` loader + typed config |
+| `src/logger.ts` | Leveled file logger |
+
+## Stress test
+
+```bash
+python3 stress-test.py
+```
+
+Covers: rapid-fire commands, multi-turn continuity, concurrent queueing, long-output chunking, session switching isolation, tool execution (file write + disk verify), unicode, server restart recovery, session titles.
+
+## Tech
+
+Bun + TypeScript, zero runtime dependencies. Crush server HTTP REST + SSE over TCP localhost. Telegram Bot API via fetch.
 
 ## License
 
-MIT © naoufac
+MIT

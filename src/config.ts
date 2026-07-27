@@ -44,6 +44,15 @@ export const config = {
   crushYolo: opt("CRUSH_YOLO", "false").toLowerCase() === "true",
   crushTimeout: parseInt(opt("CRUSH_TIMEOUT", "600"), 10),
   crushModel: opt("CRUSH_MODEL", ""),
+  // The crush *server* this bridge talks to over HTTP+SSE (the real
+  // client/server architecture). Same data-dir as the terminal so sessions
+  // are shared and any old session can be loaded/continued from Telegram.
+  crushServerPort: parseInt(opt("CRUSH_SERVER_PORT", "23917"), 10),
+  // When true, auto-allow every tool permission (no Allow/Deny prompts in TG).
+  // Defaults to true to match a terminal whose config has allowed_tools:["*"]
+  // (tools run freely, no per-action prompts) — the common crush setup. Set
+  // CRUSH_AUTO_ALLOW=false to surface Allow/Deny buttons for each tool call.
+  crushAutoAllow: opt("CRUSH_AUTO_ALLOW", "true").toLowerCase() === "true",
 };
 
 export type Config = typeof config;

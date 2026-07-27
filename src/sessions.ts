@@ -1,12 +1,11 @@
-import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { resolve, basename } from "node:path";
-import { homedir } from "node:os";
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { resolve } from "node:path";
+import { server, type SessionMeta } from "./server-client.ts";
+import { log } from "./logger.ts";
 
 const DATA_DIR = resolve(process.cwd(), "data");
 const SESSIONS_DIR = resolve(DATA_DIR, "sessions");
 if (!existsSync(SESSIONS_DIR)) mkdirSync(SESSIONS_DIR, { recursive: true });
-
-const CRUSH_DIR = resolve(homedir(), ".crush");
 
 interface StoredSession {
   sessionId: string | null;
@@ -40,35 +39,48 @@ export function clearSession(chatId: number) {
   setSession(chatId, null, "");
 }
 
-export function listCrushSessions(limit = 12): Array<{ id: string; mtime: number }> {
-  const projectsDir = resolve(CRUSH_DIR, "projects");
-  if (!existsSync(projectsDir)) return [];
-  const out: Array<{ id: string; mtime: number }> = [];
-  try {
-    for (const proj of readdirSync(projectsDir)) {
-      const projSessions = resolve(projectsDir, proj, "sessions");
-      if (!existsSync(projSessions)) continue;
-      for (const f of readdirSync(projSessions)) {
-        if (!f.endsWith(".json")) continue;
-        const full = resolve(projSessions, f);
-        try {
-          const st = statSync(full);
-          out.push({ id: basename(f).replace(/\.json$/, ""), mtime: st.mtimeMs });
-        } catch {
-          // skip
-        }
-      }
+// Ensure this chat has a live session id to send to. Creates one on first use.
+export async function ensureSessionId(chatId: number): Promise<string> {
+  const stored = getSession(chatId);
+  if (stored.sessionId) {
+    // Validate it still exists on the server; if not, drop and recreate.
+    try {
+      await server.getSession(stored.sessionId);
+      return stored.sessionId;
+    } catch {
+      log.warn("stored session gone, creating fresh", { chatId, old: stored.sessionId });
     }
-  } catch {
-    // ignore
   }
-  return out.sort((a, b) => b.mtime - a.mtime).slice(0, limit);
+  const title = stored.firstMessage
+    ? stored.firstMessage.slice(0, 60)
+    : `Telegram chat ${chatId}`;
+  const s = await server.createSession(title);
+  setSession(chatId, s.id, stored.firstMessage || undefined);
+  return s.id;
 }
 
-export function recentChatSessions(limit = 12): Array<{ chatId: number } & StoredSession> {
+// Bind this chat to an existing session (load/continue any old session).
+export async function loadSession(chatId: number, sessionId: string): Promise<boolean> {
+  try {
+    const s = await server.getSession(sessionId);
+    setSession(chatId, s.id, s.title);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Create a brand-new session for this chat (/new).
+export async function newSession(chatId: number): Promise<string> {
+  const s = await server.createSession(`Telegram chat ${chatId}`);
+  setSession(chatId, s.id, undefined);
+  return s.id;
+}
+
+export async function recentChatSessions(limit = 12): Promise<Array<{ chatId: number } & StoredSession>> {
   if (!existsSync(SESSIONS_DIR)) return [];
-  return readdirSync(SESSIONS_DIR)
-    .filter((f) => f.endsWith(".json"))
+  const files = readdirSync(SESSIONS_DIR).filter((f) => f.endsWith(".json"));
+  return files
     .map((f) => {
       try {
         const s = JSON.parse(readFileSync(resolve(SESSIONS_DIR, f), "utf8")) as StoredSession;
@@ -80,4 +92,20 @@ export function recentChatSessions(limit = 12): Array<{ chatId: number } & Store
     .filter((x): x is { chatId: number } & StoredSession => x !== null)
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, limit);
+}
+
+// Dashboard view: newest crush sessions (terminal + telegram) via the server.
+export async function listCrushSessions(limit = 12): Promise<Array<{ id: string; title?: string; updatedAt: number }>> {
+  let sessions: SessionMeta[] = [];
+  try {
+    sessions = await server.listSessions();
+  } catch (e) {
+    log.warn("listCrushSessions failed", { error: String(e) });
+    return [];
+  }
+  return sessions
+    .slice()
+    .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
+    .slice(0, limit)
+    .map((s) => ({ id: s.id, title: s.title, updatedAt: s.updated_at }));
 }
